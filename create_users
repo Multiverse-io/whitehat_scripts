@@ -15,9 +15,11 @@ do
   fi
 done
 
-eval "$package_manager jq python3 python3-pip"
-pip3 install awscli --upgrade --user
-export PATH=~/.local/bin:$PATH
+if ! aws --v; then
+  eval "$package_manager jq python3 python3-pip"
+  pip3 install awscli --upgrade --user
+  export PATH=~/.local/bin:$PATH
+fi
 
 # get user/key pairs from AWS
 secret=$(aws secretsmanager get-secret-value --secret-id users_with_keys_testing)
@@ -38,12 +40,13 @@ while IFS="=" read -r key value; do
 
     if grep -q sudo /etc/group; then
       sudo usermod -a -G sudo $user_name
-    else 
+    else
       if grep -q wheel /etc/group; then
         sudo usermod -a -G wheel $user_name
       fi
     fi
 
+    echo "$user_name    ALL=(ALL:ALL) ALL" | sudo tee -a /etc/sudoers.d/whitehat_users #DO NOT CHANGE THIS! if this goes wrong you brick the box
     sudo chage -d 0 $user_name
   fi
 done < <(jq -r ".SecretString | fromjson | to_entries|map(\"\(.key)=\(.value)\")|.[]" <<< "$secret")
