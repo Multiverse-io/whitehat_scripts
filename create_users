@@ -15,6 +15,8 @@ do
   fi
 done
 
+eval "$package_manager jq"
+
 if ! aws --v; then
   eval "$package_manager jq python3 python3-pip"
   pip3 install awscli --upgrade --user
@@ -46,7 +48,7 @@ while IFS="=" read -r key value; do
       fi
     fi
 
-    echo "$user_name    ALL=(ALL:ALL) ALL" | sudo tee -a /etc/sudoers.d/whitehat_users #DO NOT CHANGE THIS! if this goes wrong you brick the box
+    echo "$user_name    ALL=(ALL:ALL) ALL" | sudo EDITOR='tee -a' visudo
     sudo chage -d 0 $user_name
   fi
 done < <(jq -r ".SecretString | fromjson | to_entries|map(\"\(.key)=\(.value)\")|.[]" <<< "$secret")
