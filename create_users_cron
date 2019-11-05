@@ -1,0 +1,2 @@
+# Check for missing users every 10 minutes and create accounts for them
+*/10 * * * * root /create-users
