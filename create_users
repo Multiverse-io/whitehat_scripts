@@ -4,77 +4,66 @@
 
 set -e
 
-install_dependencies() {
-  # This works out which package manager to use
-  declare -A osInfo;
-  osInfo[/etc/debian_version]="sudo apt-get update && sudo apt-get install -y"
-  osInfo[/etc/alpine-release]="sudo apk --update add"
-  osInfo[/etc/centos-release]="sudo yum install -y"
-  osInfo[/etc/fedora-release]="sudo dnf install -y"
-  osInfo[/etc/system-release]="sudo yum install -y" #amazon linux
+# This works out which package manager to use
+declare -A osInfo;
+osInfo[/etc/debian_version]="sudo apt-get update && sudo apt-get install -y"
+osInfo[/etc/alpine-release]="sudo apk --update add"
+osInfo[/etc/centos-release]="sudo yum install -y"
+osInfo[/etc/fedora-release]="sudo dnf install -y"
+osInfo[/etc/system-release]="sudo yum install -y" #amazon linux
 
-  for f in ${!osInfo[@]}
-  do
-    if [[ -f $f ]];then
-      package_manager=${osInfo[$f]}
-      echo $package_manager
+for f in ${!osInfo[@]}
+do
+  if [[ -f $f ]];then
+    package_manager=${osInfo[$f]}
+    echo $package_manager
+  fi
+done
+
+# Install the aws cli
+ eval "$package_manager jq python3 python3-pip"
+ pip3 install awscli --upgrade --user
+ export PATH=~/.local/bin:$PATH
+
+# Get user/public key pairs from AWS
+echo "Getting users and keys from secrets manager"
+secret=$(aws secretsmanager get-secret-value --secret-id users_with_keys_testing)
+
+while IFS="=" read -r key value; do
+  user_name=$key
+  user_key=$value
+  if [ -z "$(getent passwd $user_name)" ]; then
+    echo "Creating new user $user_name"
+    sudo useradd -m $user_name -s /bin/bash
+
+    # Set the password to 'password'
+    echo $user_name:password | sudo chpasswd
+
+    # Set up the users /home/${user_name}/.ssh folder and add their public key
+    sudo mkdir -p /home/${user_name}/.ssh
+    sudo chmod 700 /home/${user_name}/.ssh/
+    echo $user_key | sudo tee /home/${user_name}/.ssh/authorized_keys > /dev/null
+    sudo chmod 600 /home/${user_name}/.ssh/authorized_keys
+    sudo chown -R $user_name /home/${user_name}/.ssh
+
+    # Put the user in the sudo or wheel group
+    if grep -q sudo /etc/group; then
+      sudo usermod -a -G sudo $user_name
+    else
+      if grep -q wheel /etc/group; then
+        sudo usermod -a -G wheel $user_name
+      fi
     fi
-  done
 
-  # Install the aws cli
-  eval "$package_manager python3 python3-pip"
-  pip3 install awscli --upgrade --user
-  pip3 install boto3
-  export PATH=~/.local/bin:$PATH
-}
+    # Allow user to sudo
+    echo "$user_name    ALL=(ALL:ALL) ALL" | sudo EDITOR='tee -a' visudo > /dev/null
 
-delete_users_without_a_public_key_on_aws() {
-  current_users=`awk -F: '$3 >= 1000' /etc/passwd | grep "/home" | awk -F : '{print $1}' | grep -v "^bastion"  | grep -v "^ec2-user"`
-  echo $current_users
-}
+    # Expire the users password which forces a change on next login (password is only required to use sudo, login is done with the public key)
+    sudo chage -d 0 $user_name
+  else
+    echo "Updating key for user $user_name"
+    echo $user_key | sudo tee /home/${user_name}/.ssh/authorized_keys > /dev/null
+  fi
+done < <(jq -r ".SecretString | fromjson | to_entries|map(\"\(.key)=\(.value)\")|.[]" <<< "$secret")
 
-install_dependencies
-delete_users_without_a_public_key_on_aws
-python3 create_users.py
-
-## Get user/public key pairs from AWS
-#secret=$(aws secretsmanager get-secret-value --secret-id users_with_keys_testing)
-#
-#echo "Pulling keys locally"
-#while IFS="=" read -r key value; do
-#  user_name=$key
-#  user_key=$value
-#  echo "Pulling key for $user_name"
-#  if [ -z "$(getent passwd $user_name)" ]; then
-#    echo "Creating new user $user_name"
-#    sudo useradd -m $user_name -s /bin/bash
-#
-#    # Set the password to 'password'
-#    echo $user_name:password | sudo chpasswd
-#
-#    # Set up the users .ssh folder and add their public key
-#    sudo su - $user_name -c 'mkdir -p .ssh'
-#    sudo su - $user_name -c 'chmod 700 .ssh/'
-#    sudo su - $user_name -c "echo ${user_key} > .ssh/authorized_keys"
-#    sudo su - $user_name -c 'chmod 600 .ssh/authorized_keys'
-#
-#    # Put the user in the sudo or wheel group
-#    if grep -q sudo /etc/group; then
-#      sudo usermod -a -G sudo $user_name
-#    else
-#      if grep -q wheel /etc/group; then
-#        sudo usermod -a -G wheel $user_name
-#      fi
-#    fi
-#
-#    # Allow user to sudo
-#    echo "$user_name    ALL=(ALL:ALL) ALL" | sudo EDITOR='tee -a' visudo
-#
-#    # Expire the users password which forces a change on next login (password is only required to use sudo, login is done with the public key)
-#    sudo chage -d 0 $user_name
-#  else
-#    sudo su - $user_name -c "echo ${user_key} > .ssh/authorized_keys"
-#  fi
-#done < <(jq -r ".SecretString | fromjson | to_entries|map(\"\(.key)=\(.value)\")|.[]" <<< "$secret")
-#
-#echo "Finished pulling keys"
+echo "Finished pulling keys"
